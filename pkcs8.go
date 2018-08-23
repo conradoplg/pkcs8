@@ -18,6 +18,11 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
+// MaxPBKDF2Iterations is the maximum number of PBKDF2 iterations allowed.
+// This is required to avoid DoS with user-supplied keys.
+// Change if you require more iterations.
+var MaxPBKDF2Iterations = 100000
+
 // Copy from crypto/x509
 var (
 	oidPublicKeyRSA   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
@@ -170,10 +175,12 @@ func ParsePKCS8PrivateKey(der []byte, v ...[]byte) (interface{}, error) {
 	salt := kdfParam.Salt
 	iter := kdfParam.IterationCount
 	keyHash := sha1.New
-        if kdfParam.PrfParam.IdPRF.Equal(oidHMACWithSHA256){
-            keyHash = sha256.New
-        }
-
+	if kdfParam.PrfParam.IdPRF.Equal(oidHMACWithSHA256) {
+		keyHash = sha256.New
+	}
+	if iter > MaxPBKDF2Iterations {
+		return nil, errors.New("pkcs8: key has a number of PBKDF2 iterations larger than MaxPBKDF2Iterations")
+	}
 
 	encryptedKey := privKey.EncryptedData
 	var symkey []byte
@@ -192,6 +199,13 @@ func ParsePKCS8PrivateKey(der []byte, v ...[]byte) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(iv) != block.BlockSize() {
+		return nil, errors.New("pkcs8: IV size must match cipher block size")
+	}
+	if len(encryptedKey)%block.BlockSize() != 0 {
+		return nil, errors.New("pkcs8: size of encrypted key must be multiple of block size")
+	}
+
 	mode := cipher.NewCBCDecrypter(block, iv)
 	mode.CryptBlocks(encryptedKey, encryptedKey)
 
